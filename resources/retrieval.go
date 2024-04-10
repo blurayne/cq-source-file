@@ -3,9 +3,11 @@ package resources
 import (
 	"bufio"
 	"bytes"
+	"compress/gzip"
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 	"reflect"
 	"strings"
@@ -13,7 +15,6 @@ import (
 	"github.com/antonmedv/expr"
 	"github.com/cloudquery/plugin-sdk/schema"
 	"github.com/dihedron/cq-plugin-utils/format"
-	"github.com/dihedron/cq-plugin-utils/pointer"
 	"github.com/dihedron/cq-source-file/client"
 	"github.com/xuri/excelize/v2"
 	"gopkg.in/yaml.v3"
@@ -29,7 +30,7 @@ func fetchTableData(table *client.Table) func(ctx context.Context, meta schema.C
 	return func(ctx context.Context, meta schema.ClientMeta, parent *schema.Resource, res chan<- interface{}) error {
 		client := meta.(*client.Client)
 
-		rows := []map[string]any{}
+		rows := 	{}
 		client.Logger.Debug().Str("table", table.Name).Msg("fetching data...")
 
 		switch strings.ToLower(client.Specs.Format) {
@@ -55,17 +56,29 @@ func fetchTableData(table *client.Table) func(ctx context.Context, meta schema.C
 				client.Logger.Error().Err(err).Msg("error unmarshalling data from YAML")
 				return fmt.Errorf("error unmarshalling data from YAML: %w", err)
 			}
-		case "csv":
-			data, err := os.ReadFile(client.Specs.File)
-			if err != nil {
-				client.Logger.Error().Err(err).Str("file", client.Specs.File).Msg("error reading input file")
-				return fmt.Errorf("error reading input file %q: %w", client.Specs.File, err)
+		case "csv", "csv.gz":
+			var r io.Reader
+			if strings.HasSuffix(client.Specs.File, ".gz") {
+				f, err := os.Open(client.Specs.File)
+				if err != nil {
+					return fmt.Errorf("error opening .gz file: %v", err)
+				}
+				defer f.Close()
+				gz, err := gzip.NewReader(f)
+				if err != nil {
+					return fmt.Errorf("error creating gzip reader: %v", err)
+				}
+				defer gz.Close()
+				r = gz
+			} else {
+				data, err := os.ReadFile(client.Specs.File)
+				if err != nil {
+					return fmt.Errorf("error reading csv file: %v", err)
+				}
+				r = bytes.NewReader(data)
 			}
-			client.Logger.Debug().Str("file", client.Specs.File).Msg("input file read")
-			if client.Specs.Separator == nil {
-				client.Specs.Separator = pointer.To(",")
-			}
-			scanner := bufio.NewScanner(bytes.NewReader(data))
+
+			scanner := bufio.NewScanner(r)
 			first := true
 			var keys []string
 			for scanner.Scan() {

@@ -19,3 +19,5 @@ gen-docs:
 .PHONY: gen
 gen: gen-docs
 
+build:
+	go build .
